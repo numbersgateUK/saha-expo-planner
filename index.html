@@ -4,11 +4,86 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>SAHA EXPO 2026 — Team Planner</title>
-<script>(function(){const n=()=>{};['log','warn','info','error','debug','trace','group','groupEnd','groupCollapsed'].forEach(m=>{try{console[m]=n;}catch(e){}});})();</script>
+
+<!-- ╔══════════════════════════════════════════════════════════════╗
+     ║  CONFIGURATION — EDIT THESE TWO SECTIONS ONLY              ║
+     ╚══════════════════════════════════════════════════════════════╝ -->
+
+<!-- 1. Name of your Excel file (must be uploaded to GitHub same folder) -->
+<script>const EXCEL_FILE='./team-data.xlsx';</script>
+
+<!-- 2. Paste YOUR Firebase config here (from Firebase Console) -->
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBSFgzmhp6U5OKWE6ZmJ71YmV3Uu9DteeY",
+  authDomain: "saha-expo-2026.firebaseapp.com",
+  databaseURL: "https://saha-expo-2026-default-rtdb.firebaseio.com",
+  projectId: "saha-expo-2026",
+  storageBucket: "saha-expo-2026.firebasestorage.app",
+  messagingSenderId: "849451222186",
+  appId: "1:849451222186:web:ea94983571b1d45a35bcd3"
+};
+</script>
+
+<!-- ╔══════════════════════════════════════════════════════════════╗
+     ║  DO NOT EDIT BELOW THIS LINE                                ║
+     ╚══════════════════════════════════════════════════════════════╝ -->
+<script>(function(){const n=()=>{};['log','warn','info','error','debug','trace'].forEach(m=>{try{console[m]=n;}catch(e){}});})();</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script>
+  // Initialize Firebase
+  let DB=null;
+  const FB_OK=FIREBASE_CONFIG.apiKey!=="AIzaSyBSFgzmhp6U5OKWE6ZmJ71YmV3Uu9DteeY";
+  if(FB_OK){
+    try{
+      firebase.initializeApp(FIREBASE_CONFIG);
+      DB=firebase.database();
+    }catch(e){DB=null;}
+  }
+
+  // ── DB helpers ──────────────────────────────────────────────
+  // Appointments: simple JSON object stored at /appointments
+  window.dbSaveAppts=function(appts){
+    if(DB)DB.ref('appointments').set(appts);
+    try{localStorage.setItem('saha_appts',JSON.stringify(appts));}catch(e){}
+  };
+
+  // Companies: split into 800KB chunks to stay within Firebase limits
+  window.dbSaveCompanies=function(cos){
+    try{localStorage.setItem('saha_cos',JSON.stringify(cos));}catch(e){}
+    if(!DB)return;
+    const str=JSON.stringify(cos);
+    const size=800000;
+    const total=Math.ceil(str.length/size);
+    const chunks={_total:total};
+    for(let i=0;i<total;i++)chunks['c'+i]=str.slice(i*size,(i+1)*size);
+    DB.ref('companies').set(chunks);
+  };
+
+  window.dbLoadCompanies=function(){
+    return new Promise(resolve=>{
+      if(!DB){resolve(null);return;}
+      DB.ref('companies').once('value',snap=>{
+        const d=snap.val();
+        if(!d||!d._total){resolve(null);return;}
+        try{
+          let s='';
+          for(let i=0;i<d._total;i++)s+=d['c'+i]||'';
+          resolve(JSON.parse(s));
+        }catch(e){resolve(null);}
+      });
+    });
+  };
+
+  window.dbOnAppts=function(cb){
+    if(DB){DB.ref('appointments').on('value',s=>cb(s.val()||{}));}
+  };
+</script>
 <style>
   *{box-sizing:border-box;margin:0;padding:0;}
   body{font-family:'Segoe UI',sans-serif;background:#0f172a;height:100vh;overflow:hidden;}
@@ -16,9 +91,8 @@
   ::-webkit-scrollbar{width:5px;height:5px;}
   ::-webkit-scrollbar-track{background:#1e293b;}
   ::-webkit-scrollbar-thumb{background:#334155;border-radius:99px;}
-  ::-webkit-scrollbar-thumb:hover{background:#475569;}
   @keyframes spin{to{transform:rotate(360deg)}}
-  textarea,input,select,button{font-family:'Segoe UI',sans-serif;}
+  textarea,input,button{font-family:'Segoe UI',sans-serif;}
   a{text-decoration:none;}
 </style>
 </head>
@@ -27,21 +101,18 @@
 <script type="text/babel">
 const {useState,useMemo,useEffect,useCallback}=React;
 
-/* ── Constants ────────────────────────────────────────────────────────────── */
 const HC={"1":"#6366f1","2":"#f59e0b","3":"#10b981","4":"#ef4444","5":"#3b82f6","6":"#ec4899","7":"#f97316","8":"#8b5cf6"};
 const DATES=["06 May","07 May","08 May","09 May"];
 const DDAYS=["Tuesday","Wednesday","Thursday","Friday"];
 const DC={"06 May":"#818cf8","07 May":"#fbbf24","08 May":"#34d399","09 May":"#f87171"};
 const RATINGS=[
-  {id:"important",   label:"⭐ Important",     color:"#f59e0b"},
-  {id:"interested",  label:"✅ Interested",    color:"#10b981"},
+  {id:"important",    label:"⭐ Important",     color:"#f59e0b"},
+  {id:"interested",   label:"✅ Interested",    color:"#10b981"},
   {id:"not-interested",label:"❌ Not Interested",color:"#ef4444"},
   {id:"factory-visit",label:"🏭 Factory Visit", color:"#8b5cf6"},
-  {id:"follow-up",   label:"🔄 Follow-up",     color:"#3b82f6"},
+  {id:"follow-up",    label:"🔄 Follow-up",     color:"#3b82f6"},
 ];
 const AC=["#6366f1","#f59e0b","#10b981","#ef4444","#3b82f6","#ec4899","#f97316","#8b5cf6","#84cc16","#14b8a6","#0ea5e9","#a855f7","#f43f5e","#78716c","#64748b","#d97706","#059669","#dc2626","#2563eb","#db2777","#ea580c","#7c3aed","#65a30d","#0d9488","#0891b2","#9333ea","#e11d48","#ca8a04"];
-const SK_C="saha_expo_companies_v1";
-const SK_A="saha_expo_appts_v1";
 
 /* ── Excel Parser ─────────────────────────────────────────────────────────── */
 function parseExcel(wb){
@@ -55,42 +126,30 @@ function parseExcel(wb){
   const heads=raw[hRow].map(h=>String(h).toUpperCase().trim());
   const G=kw=>heads.findIndex(h=>h.includes(kw));
   const idx={name:G("COMPANY"),contact:G("CONTACT"),about:G("ABOUT"),areas:G("BUSINESS"),hall:G("HALL")};
-  return raw.slice(hRow+1)
-    .filter(r=>r[idx.name]&&String(r[idx.name]).trim())
-    .map(r=>{
-      const get=i=>String(r[i]||"").trim();
-      const name=get(idx.name),contact=get(idx.contact),about=get(idx.about).slice(0,500);
-      const areasRaw=get(idx.areas),hallRaw=get(idx.hall);
-      const hm=hallRaw.match(/Hall:\s*(\d+)/i),sm=hallRaw.match(/Stand:\s*(\S+)/i);
-      const hall=hm?hm[1]:"",stand=sm?sm[1].replace(/\|/g,""):"";
-      const areas=areasRaw.split(/[\n\r]/).map(s=>s.trim()).filter(s=>s&&s!=="N/A"&&s.length>2);
-      const flagRe=/(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
-      const flags=[...contact.matchAll(flagRe)];
-      const flag=flags.length?flags[flags.length-1][0]:"";
-      let country="";
-      if(flag){const fi=contact.lastIndexOf(flag);country=contact.slice(fi+flag.length).trim().split(/[\n\r]/)[0].trim();}
-      const em=contact.match(/[\w.+-]+@[\w.-]+\.\w+/);
-      const email=em?em[0]:"";
-      let web="";
-      for(const t of contact.replace(/\n/g," ").split(/\s+/)){
-        if(t.includes(".")&&!t.includes("@")&&t.length>5&&!/^\d/.test(t)&&!/[,;()]/.test(t)){web=t.replace(/[,;]$/,"");break;}
-      }
-      return{name,about,areas,hall,stand,flag,country,email,web};
-    })
-    .filter(c=>c.name&&c.hall);
+  return raw.slice(hRow+1).filter(r=>r[idx.name]&&String(r[idx.name]).trim()).map(r=>{
+    const get=i=>String(r[i]||"").trim();
+    const name=get(idx.name),contact=get(idx.contact),about=get(idx.about).slice(0,500);
+    const areasRaw=get(idx.areas),hallRaw=get(idx.hall);
+    const hm=hallRaw.match(/Hall:\s*(\d+)/i),sm=hallRaw.match(/Stand:\s*(\S+)/i);
+    const hall=hm?hm[1]:"",stand=sm?sm[1].replace(/\|/g,""):"";
+    const areas=areasRaw.split(/[\n\r]/).map(s=>s.trim()).filter(s=>s&&s!=="N/A"&&s.length>2);
+    const flagRe=/(?:[\uD83C][\uDDE6-\uDDFF]){2}/g;
+    const flags=[...contact.matchAll(flagRe)];
+    const flag=flags.length?flags[flags.length-1][0]:"";
+    let country="";
+    if(flag){const fi=contact.lastIndexOf(flag);country=contact.slice(fi+flag.length).trim().split(/[\n\r]/)[0].trim();}
+    const em=contact.match(/[\w.+-]+@[\w.-]+\.\w+/);
+    const email=em?em[0]:"";
+    let web="";
+    for(const t of contact.replace(/\n/g," ").split(/\s+/)){
+      if(t.includes(".")&&!t.includes("@")&&t.length>5&&!/^\d/.test(t)&&!/[,;()]/.test(t)){web=t.replace(/[,;]$/,"");break;}
+    }
+    return{name,about,areas,hall,stand,flag,country,email,web};
+  }).filter(c=>c.name&&c.hall);
 }
 
-const buildAcm=cos=>{
-  const a=[...new Set(cos.flatMap(c=>c.areas))].sort();
-  const m={};a.forEach((x,i)=>m[x]=AC[i%AC.length]);return m;
-};
-
-/* ── Bar ──────────────────────────────────────────────────────────────────── */
-const Bar=({val,max,color,h=18})=>(
-  <div style={{background:"#0f172a",borderRadius:99,overflow:"hidden",height:h}}>
-    <div style={{width:`${(val/Math.max(max,1))*100}%`,background:color,height:"100%",borderRadius:99,minWidth:val>0?4:0,transition:"width 0.5s"}}/>
-  </div>
-);
+const buildAcm=cos=>{const a=[...new Set(cos.flatMap(c=>c.areas))].sort();const m={};a.forEach((x,i)=>m[x]=AC[i%AC.length]);return m;};
+const Bar=({val,max,color,h=18})=>(<div style={{background:"#0f172a",borderRadius:99,overflow:"hidden",height:h}}><div style={{width:`${(val/Math.max(max,1))*100}%`,background:color,height:"100%",borderRadius:99,minWidth:val>0?4:0,transition:"width 0.5s"}}/></div>);
 
 /* ── Company Card ─────────────────────────────────────────────────────────── */
 function Card({c,appt={},onUpdate,highlight,acm,calendarView}){
@@ -127,106 +186,62 @@ function Card({c,appt={},onUpdate,highlight,acm,calendarView}){
               ✕ Cancel Appointment — {date}
             </button>
           )}
-          {c.about&&(
-            <div style={{background:"#1e293b",borderRadius:7,padding:"7px 9px",marginBottom:7,border:"1px solid #334155"}}>
-              <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>ℹ️ About</div>
-              <div style={{fontSize:10,color:"#cbd5e1",lineHeight:1.5}}>{c.about}</div>
+          {c.about&&(<div style={{background:"#1e293b",borderRadius:7,padding:"7px 9px",marginBottom:7,border:"1px solid #334155"}}>
+            <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>ℹ️ About</div>
+            <div style={{fontSize:10,color:"#cbd5e1",lineHeight:1.5}}>{c.about}</div>
+          </div>)}
+          {(c.country||c.email||c.web)&&(<div style={{background:"#1e293b",borderRadius:7,padding:"7px 9px",marginBottom:7,border:"1px solid #334155"}}>
+            <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:4}}>📬 Contact</div>
+            <div style={{fontSize:10,color:"#94a3b8",display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}}>
+              {c.country&&<span>{c.flag} <b style={{color:"#e2e8f0"}}>{c.country}</b></span>}
+              {c.email&&<span>✉️ {c.email}</span>}
+              {c.web&&(<a href={c.web.startsWith("http")?c.web:"https://"+c.web} target="_blank" rel="noopener noreferrer" onClick={e=>e.stopPropagation()} style={{color:"#818cf8",display:"inline-flex",alignItems:"center",gap:3}}>🌐 {c.web} <span style={{fontSize:8}}>↗</span></a>)}
             </div>
-          )}
-          {(c.country||c.email||c.web)&&(
-            <div style={{background:"#1e293b",borderRadius:7,padding:"7px 9px",marginBottom:7,border:"1px solid #334155"}}>
-              <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:4}}>📬 Contact</div>
-              <div style={{fontSize:10,color:"#94a3b8",display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}}>
-                {c.country&&<span>{c.flag} <b style={{color:"#e2e8f0"}}>{c.country}</b></span>}
-                {c.email&&<span>✉️ {c.email}</span>}
-                {c.web&&(
-                  <a href={c.web.startsWith("http")?c.web:"https://"+c.web}
-                    target="_blank" rel="noopener noreferrer"
-                    onClick={e=>e.stopPropagation()}
-                    style={{color:"#818cf8",display:"inline-flex",alignItems:"center",gap:3}}>
-                    🌐 {c.web} <span style={{fontSize:8,opacity:0.7}}>↗</span>
-                  </a>
-                )}
-              </div>
-            </div>
-          )}
+          </div>)}
           <div style={{marginBottom:7}}>
             <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:4}}>🏷️ Status</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {RATINGS.map(r=>(
-                <button key={r.id} onClick={e=>{e.stopPropagation();onUpdate("rating",rating===r.id?null:r.id);}}
-                  style={{padding:"4px 8px",border:`1.5px solid ${r.color}`,borderRadius:7,background:rating===r.id?r.color:"transparent",color:rating===r.id?"#0f172a":r.color,fontWeight:700,fontSize:9,cursor:"pointer"}}>
-                  {r.label}
-                </button>
-              ))}
+              {RATINGS.map(r=>(<button key={r.id} onClick={e=>{e.stopPropagation();onUpdate("rating",rating===r.id?null:r.id);}} style={{padding:"4px 8px",border:`1.5px solid ${r.color}`,borderRadius:7,background:rating===r.id?r.color:"transparent",color:rating===r.id?"#0f172a":r.color,fontWeight:700,fontSize:9,cursor:"pointer"}}>{r.label}</button>))}
             </div>
           </div>
           <div style={{marginBottom:7}}>
             <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:4}}>📅 Appointment Date</div>
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {DATES.map(d=>(
-                <button key={d} onClick={e=>{e.stopPropagation();onUpdate("date",date===d?null:d);}}
-                  style={{padding:"4px 10px",border:`1.5px solid ${DC[d]}`,borderRadius:99,background:date===d?DC[d]:"transparent",color:date===d?"#0f172a":DC[d],fontWeight:700,fontSize:9,cursor:"pointer"}}>
-                  {d}
-                </button>
-              ))}
-              {date&&!calendarView&&(
-                <button onClick={e=>{e.stopPropagation();onUpdate("date",null);}}
-                  style={{padding:"4px 7px",border:"1px solid #334155",borderRadius:99,background:"transparent",color:"#64748b",fontSize:8,cursor:"pointer"}}>✕</button>
-              )}
+              {DATES.map(d=>(<button key={d} onClick={e=>{e.stopPropagation();onUpdate("date",date===d?null:d);}} style={{padding:"4px 10px",border:`1.5px solid ${DC[d]}`,borderRadius:99,background:date===d?DC[d]:"transparent",color:date===d?"#0f172a":DC[d],fontWeight:700,fontSize:9,cursor:"pointer"}}>{d}</button>))}
+              {date&&!calendarView&&(<button onClick={e=>{e.stopPropagation();onUpdate("date",null);}} style={{padding:"4px 7px",border:"1px solid #334155",borderRadius:99,background:"transparent",color:"#64748b",fontSize:8,cursor:"pointer"}}>✕</button>)}
             </div>
           </div>
           <div style={{marginBottom:6}}>
             <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>📝 Notes</div>
-            <textarea value={note||""} onChange={e=>{e.stopPropagation();onUpdate("note",e.target.value);}} onClick={e=>e.stopPropagation()} rows={2}
-              placeholder="Meeting notes, products of interest, action items..."
-              style={{width:"100%",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,padding:"5px 7px",resize:"vertical",boxSizing:"border-box",outline:"none"}}/>
+            <textarea value={note||""} onChange={e=>{e.stopPropagation();onUpdate("note",e.target.value);}} onClick={e=>e.stopPropagation()} rows={2} placeholder="Meeting notes, products of interest, action items..." style={{width:"100%",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,padding:"5px 7px",resize:"vertical",boxSizing:"border-box",outline:"none"}}/>
           </div>
           <div style={{marginBottom:7}}>
             <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>🔔 Follow-up Reminder</div>
-            <input value={reminder||""} onChange={e=>{e.stopPropagation();onUpdate("reminder",e.target.value);}} onClick={e=>e.stopPropagation()}
-              placeholder="e.g. Send brochure, Schedule demo, Request pricing..."
-              style={{width:"100%",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,padding:"5px 7px",boxSizing:"border-box",outline:"none"}}/>
+            <input value={reminder||""} onChange={e=>{e.stopPropagation();onUpdate("reminder",e.target.value);}} onClick={e=>e.stopPropagation()} placeholder="e.g. Send brochure, Schedule demo..." style={{width:"100%",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,padding:"5px 7px",boxSizing:"border-box",outline:"none"}}/>
           </div>
-          {c.areas.length>0&&(
-            <div>
-              <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>Business Areas</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                {c.areas.map((a,i)=>(
-                  <span key={i} style={{background:(acm[a]||"#475569")+"22",color:acm[a]||"#94a3b8",border:`1px solid ${(acm[a]||"#475569")}33`,borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:600,boxShadow:a===highlight?`0 0 0 1.5px ${acm[a]}`:""}}>
-                    {a===highlight?"★ ":""}{a}
-                  </span>
-                ))}
-              </div>
+          {c.areas.length>0&&(<div>
+            <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",marginBottom:3}}>Business Areas</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+              {c.areas.map((a,i)=>(<span key={i} style={{background:(acm[a]||"#475569")+"22",color:acm[a]||"#94a3b8",border:`1px solid ${(acm[a]||"#475569")}33`,borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:600,boxShadow:a===highlight?`0 0 0 1.5px ${acm[a]}`:""}}>{a===highlight?"★ ":""}{a}</span>))}
             </div>
-          )}
+          </div>)}
         </div>
       )}
     </div>
   );
 }
 
-/* ── Paginated Company List ────────────────────────────────────────────────── */
 function CompanyList({companies,appts,onUpdate,acm,highlight,calendarView}){
   const [show,setShow]=useState(50);
   useEffect(()=>setShow(50),[companies]);
-  return(
-    <>
-      {companies.slice(0,show).map(c=>(
-        <Card key={c.name+c.stand} c={c} appt={appts[c.name]||{}} onUpdate={(f,v)=>onUpdate(c.name,f,v)} highlight={highlight} acm={acm} calendarView={calendarView}/>
-      ))}
-      {show<companies.length&&(
-        <button onClick={()=>setShow(n=>n+50)}
-          style={{width:"100%",padding:"9px",background:"#1e293b",border:"1px solid #334155",borderRadius:8,color:"#818cf8",fontWeight:700,fontSize:11,cursor:"pointer",marginTop:3}}>
-          ↓ Load {Math.min(50,companies.length-show)} more ({(companies.length-show).toLocaleString()} remaining)
-        </button>
-      )}
-    </>
-  );
+  return(<>
+    {companies.slice(0,show).map(c=>(<Card key={c.name+c.stand} c={c} appt={appts[c.name]||{}} onUpdate={(f,v)=>onUpdate(c.name,f,v)} highlight={highlight} acm={acm} calendarView={calendarView}/>))}
+    {show<companies.length&&(<button onClick={()=>setShow(n=>n+50)} style={{width:"100%",padding:"9px",background:"#1e293b",border:"1px solid #334155",borderRadius:8,color:"#818cf8",fontWeight:700,fontSize:11,cursor:"pointer",marginTop:3}}>↓ Load {Math.min(50,companies.length-show)} more ({(companies.length-show).toLocaleString()} remaining)</button>)}
+  </>);
 }
 
 /* ── Dashboard ────────────────────────────────────────────────────────────── */
-function DashboardTab({companies,appts,onUpdate,acm}){
+function DashboardTab({companies,appts,onUpdate,acm,syncStatus}){
   const [panel,setPanel]=useState(null);
   const [pLabel,setPLabel]=useState("");
   const [pColor,setPColor]=useState("#6366f1");
@@ -242,10 +257,7 @@ function DashboardTab({companies,appts,onUpdate,acm}){
   const hData=["1","2","3","4","5","6","7","8"].map(h=>{const hc=companies.filter(c=>c.hall===h);return{h,t:hc.length,s:hc.filter(c=>appts[c.name]?.date).length};}).filter(x=>x.t>0);
   const cData={};companies.forEach(c=>{if(!c.country)return;if(!cData[c.country])cData[c.country]={flag:c.flag,n:0};cData[c.country].n++;});
   const topC=Object.entries(cData).sort((a,b)=>b[1].n-a[1].n).slice(0,10);
-  const maxH=Math.max(...hData.map(x=>x.t),1);
-  const maxD=Math.max(...Object.values(dC),1);
-  const maxC=topC[0]?.[1]?.n||1;
-  const maxR=Math.max(...Object.values(rC),1);
+  const maxH=Math.max(...hData.map(x=>x.t),1),maxD=Math.max(...Object.values(dC),1),maxC=topC[0]?.[1]?.n||1,maxR=Math.max(...Object.values(rC),1);
   const withR=companies.filter(c=>appts[c.name]?.reminder).length;
 
   const openPanel=(label,icon,color,list,grouped=false)=>{
@@ -254,135 +266,129 @@ function DashboardTab({companies,appts,onUpdate,acm}){
   };
 
   const STATS=[
-    {id:"total",   l:"Total Companies",v:total,           c:"#6366f1",i:"🏢",f:()=>companies},
-    {id:"sched",   l:"Scheduled",      v:sched,           c:"#22c55e",i:"✅",f:()=>companies.filter(c=>appts[c.name]?.date)},
-    {id:"pend",    l:"Pending",        v:total-sched,     c:"#f59e0b",i:"⏳",f:()=>companies.filter(c=>!appts[c.name]?.date)},
-    {id:"imp",     l:"Important",      v:rC.important||0, c:"#f59e0b",i:"⭐",f:()=>companies.filter(c=>appts[c.name]?.rating==="important")},
-    {id:"fu",      l:"Follow-up",      v:rC["follow-up"]||0,c:"#3b82f6",i:"🔄",f:()=>companies.filter(c=>appts[c.name]?.rating==="follow-up")},
-    {id:"rem",     l:"Reminders",      v:withR,           c:"#818cf8",i:"🔔",f:()=>companies.filter(c=>appts[c.name]?.reminder)},
+    {id:"total",l:"Total Companies",v:total,           c:"#6366f1",i:"🏢",f:()=>companies},
+    {id:"sched",l:"Scheduled",      v:sched,           c:"#22c55e",i:"✅",f:()=>companies.filter(c=>appts[c.name]?.date)},
+    {id:"pend", l:"Pending",        v:total-sched,     c:"#f59e0b",i:"⏳",f:()=>companies.filter(c=>!appts[c.name]?.date)},
+    {id:"imp",  l:"Important",      v:rC.important||0, c:"#f59e0b",i:"⭐",f:()=>companies.filter(c=>appts[c.name]?.rating==="important")},
+    {id:"fu",   l:"Follow-up",      v:rC["follow-up"]||0,c:"#3b82f6",i:"🔄",f:()=>companies.filter(c=>appts[c.name]?.rating==="follow-up")},
+    {id:"rem",  l:"Reminders",      v:withR,           c:"#818cf8",i:"🔔",f:()=>companies.filter(c=>appts[c.name]?.reminder)},
   ];
 
   const filteredPanel=useMemo(()=>{
     const q=pSearch.toLowerCase();
     const list=pSearch?pCos.filter(c=>c.name.toLowerCase().includes(q)||(c.country||"").toLowerCase().includes(q)||c.hall.includes(q)):pCos;
     if(!pGrouped)return{all:list,booked:[],unbooked:[]};
-    const booked=list.filter(c=>appts[c.name]?.date);
-    const unbooked=list.filter(c=>!appts[c.name]?.date);
-    return{all:list,booked,unbooked};
+    return{all:list,booked:list.filter(c=>appts[c.name]?.date),unbooked:list.filter(c=>!appts[c.name]?.date)};
   },[pCos,pSearch,pGrouped,appts]);
 
   return(
     <div style={{flex:1,display:"flex",overflow:"hidden"}}>
       <div style={{flex:1,overflowY:"auto",padding:"14px 18px",background:"#0f172a"}}>
 
+        {/* Sync Status Banner */}
+        <div style={{marginBottom:12,padding:"8px 14px",borderRadius:9,background:FB_OK?"#10b98111":"#ef444411",border:`1px solid ${FB_OK?"#10b98133":"#ef444433"}`,display:"flex",alignItems:"center",gap:8,fontSize:9}}>
+          <div style={{width:8,height:8,borderRadius:99,background:FB_OK?(syncStatus==="live"?"#10b981":"#f59e0b"):"#ef4444",flexShrink:0}}/>
+          {FB_OK?(
+            <span style={{color:syncStatus==="live"?"#10b981":"#f59e0b",fontWeight:700}}>
+              {syncStatus==="live"
+                ?"🔄 Firebase connected — all changes sync instantly across ALL devices & users"
+                :"⏳ Connecting to Firebase..."}
+            </span>
+          ):(
+            <span style={{color:"#ef4444",fontWeight:700}}>
+              ⚠️ Firebase not configured — data only saves on THIS browser. Open the HTML file and paste your Firebase config to enable cross-device sync.
+            </span>
+          )}
+        </div>
+
         {/* Stat Boxes */}
         <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:10,marginBottom:14}}>
-          {STATS.map(s=>{
-            const act=panel===s.l;
-            return(
-              <div key={s.id} onClick={()=>openPanel(s.l,s.i,s.c,s.f())}
-                style={{background:act?s.c+"33":"#1e293b",borderRadius:10,padding:"12px 8px",border:`1.5px solid ${act?s.c:s.c+"33"}`,textAlign:"center",cursor:"pointer",transition:"all 0.18s",transform:act?"scale(1.04)":"scale(1)",boxShadow:act?`0 4px 20px ${s.c}44`:"none"}}>
-                <div style={{fontSize:20,marginBottom:2}}>{s.i}</div>
-                <div style={{fontSize:22,fontWeight:800,color:s.c,lineHeight:1}}>{s.v.toLocaleString()}</div>
-                <div style={{fontSize:8,color:act?"#e2e8f0":"#64748b",fontWeight:600,textTransform:"uppercase",marginTop:3,lineHeight:1.3}}>{s.l}</div>
-                {act&&<div style={{fontSize:8,color:s.c,marginTop:4,fontWeight:700}}>▲ viewing</div>}
-              </div>
-            );
-          })}
+          {STATS.map(s=>{const act=panel===s.l;return(
+            <div key={s.id} onClick={()=>openPanel(s.l,s.i,s.c,s.f())}
+              style={{background:act?s.c+"33":"#1e293b",borderRadius:10,padding:"12px 8px",border:`1.5px solid ${act?s.c:s.c+"33"}`,textAlign:"center",cursor:"pointer",transition:"all 0.18s",transform:act?"scale(1.04)":"scale(1)",boxShadow:act?`0 4px 20px ${s.c}44`:"none"}}>
+              <div style={{fontSize:20,marginBottom:2}}>{s.i}</div>
+              <div style={{fontSize:22,fontWeight:800,color:s.c,lineHeight:1}}>{s.v.toLocaleString()}</div>
+              <div style={{fontSize:8,color:act?"#e2e8f0":"#64748b",fontWeight:600,textTransform:"uppercase",marginTop:3,lineHeight:1.3}}>{s.l}</div>
+              {act&&<div style={{fontSize:8,color:s.c,marginTop:4,fontWeight:700}}>▲ viewing</div>}
+            </div>
+          );})}
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-
           {/* By Date */}
           <div style={{background:"#1e293b",borderRadius:12,padding:"14px 16px",border:"1px solid #334155"}}>
             <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>📅 Appointments by Date <span style={{fontSize:9,color:"#475569",fontWeight:400}}>— click a row</span></div>
-            {DATES.map((d,i)=>{
-              const act=panel===d;
-              return(
-                <div key={d} onClick={()=>openPanel(d,"📅",DC[d],companies.filter(c=>appts[c.name]?.date===d))}
-                  style={{marginBottom:9,padding:"6px 8px",borderRadius:8,cursor:"pointer",background:act?DC[d]+"22":"transparent",border:act?`1px solid ${DC[d]}44`:"1px solid transparent",transition:"all 0.15s"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                    <span style={{fontSize:11,color:DC[d],fontWeight:700}}>{d} <span style={{color:"#64748b",fontSize:9}}>({DDAYS[i]})</span></span>
-                    <span style={{fontSize:12,color:DC[d],fontWeight:800}}>{dC[d]||0}</span>
-                  </div>
-                  <Bar val={dC[d]||0} max={maxD} color={DC[d]} h={20}/>
+            {DATES.map((d,i)=>{const act=panel===d;return(
+              <div key={d} onClick={()=>openPanel(d,"📅",DC[d],companies.filter(c=>appts[c.name]?.date===d))}
+                style={{marginBottom:9,padding:"6px 8px",borderRadius:8,cursor:"pointer",background:act?DC[d]+"22":"transparent",border:act?`1px solid ${DC[d]}44`:"1px solid transparent",transition:"all 0.15s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,color:DC[d],fontWeight:700}}>{d} <span style={{color:"#64748b",fontSize:9}}>({DDAYS[i]})</span></span>
+                  <span style={{fontSize:12,color:DC[d],fontWeight:800}}>{dC[d]||0}</span>
                 </div>
-              );
-            })}
+                <Bar val={dC[d]||0} max={maxD} color={DC[d]} h={20}/>
+              </div>
+            );})}
             <div style={{marginTop:10,padding:"6px",background:"#0f172a",borderRadius:7,textAlign:"center",fontSize:10,color:"#64748b"}}>
-              Total: <b style={{color:"#22c55e"}}>{sched}</b>/{total.toLocaleString()} ({total>0?Math.round(sched/total*100):0}% scheduled)
+              <b style={{color:"#22c55e"}}>{sched}</b>/{total.toLocaleString()} ({total>0?Math.round(sched/total*100):0}% scheduled)
             </div>
           </div>
 
           {/* Status */}
           <div style={{background:"#1e293b",borderRadius:12,padding:"14px 16px",border:"1px solid #334155"}}>
             <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>🏷️ Status Distribution <span style={{fontSize:9,color:"#475569",fontWeight:400}}>— click a row</span></div>
-            {RATINGS.map(r=>{
-              const act=panel===r.label;
-              return(
-                <div key={r.id} onClick={()=>openPanel(r.label,r.label.split(" ")[0],r.color,companies.filter(c=>appts[c.name]?.rating===r.id))}
-                  style={{marginBottom:9,padding:"5px 7px",borderRadius:8,cursor:"pointer",background:act?r.color+"22":"transparent",border:act?`1px solid ${r.color}44`:"1px solid transparent",transition:"all 0.15s"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                    <span style={{fontSize:10,color:r.color,fontWeight:600}}>{r.label}</span>
-                    <span style={{fontSize:10,color:r.color,fontWeight:800}}>{rC[r.id]||0}</span>
-                  </div>
-                  <Bar val={rC[r.id]||0} max={Math.max(maxR,1)} color={r.color} h={14}/>
+            {RATINGS.map(r=>{const act=panel===r.label;return(
+              <div key={r.id} onClick={()=>openPanel(r.label,r.label.split(" ")[0],r.color,companies.filter(c=>appts[c.name]?.rating===r.id))}
+                style={{marginBottom:9,padding:"5px 7px",borderRadius:8,cursor:"pointer",background:act?r.color+"22":"transparent",border:act?`1px solid ${r.color}44`:"1px solid transparent",transition:"all 0.15s"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{fontSize:10,color:r.color,fontWeight:600}}>{r.label}</span>
+                  <span style={{fontSize:10,color:r.color,fontWeight:800}}>{rC[r.id]||0}</span>
                 </div>
-              );
-            })}
+                <Bar val={rC[r.id]||0} max={Math.max(maxR,1)} color={r.color} h={14}/>
+              </div>
+            );})}
           </div>
         </div>
 
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-
           {/* By Hall */}
           <div style={{background:"#1e293b",borderRadius:12,padding:"14px 16px",border:"1px solid #334155"}}>
             <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>🏛️ Companies by Hall <span style={{fontSize:9,color:"#475569",fontWeight:400}}>— click a row</span></div>
-            {hData.map(({h,t,s})=>{
-              const act=panel===`Hall ${h}`;
-              const hc=HC[h]||"#475569";
-              return(
-                <div key={h} onClick={()=>openPanel(`Hall ${h}`,"🏛️",hc,companies.filter(c=>c.hall===h),true)}
-                  style={{marginBottom:8,padding:"6px 8px",borderRadius:8,cursor:"pointer",background:act?hc+"22":"transparent",border:act?`1px solid ${hc}44`:"1px solid transparent",transition:"all 0.15s"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
-                    <div style={{width:20,height:20,borderRadius:5,background:hc,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:9,flexShrink:0}}>{h}</div>
-                    <span style={{fontSize:10,color:"#94a3b8",flex:1}}>Hall {h}</span>
-                    <span style={{background:"#22c55e22",color:"#22c55e",borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:700}}>✅ {s} booked</span>
-                    <span style={{fontSize:9,color:"#64748b"}}>/ {t.toLocaleString()}</span>
-                  </div>
-                  <div style={{background:"#0f172a",borderRadius:99,overflow:"hidden",height:14,position:"relative"}}>
-                    <div style={{width:`${t/maxH*100}%`,background:hc+"44",height:"100%",borderRadius:99}}/>
-                    {s>0&&<div style={{width:`${s/maxH*100}%`,background:hc,height:"100%",borderRadius:99,position:"absolute",top:0,left:0}}/>}
-                  </div>
+            {hData.map(({h,t,s})=>{const act=panel===`Hall ${h}`;const hc=HC[h]||"#475569";return(
+              <div key={h} onClick={()=>openPanel(`Hall ${h}`,"🏛️",hc,companies.filter(c=>c.hall===h),true)}
+                style={{marginBottom:8,padding:"6px 8px",borderRadius:8,cursor:"pointer",background:act?hc+"22":"transparent",border:act?`1px solid ${hc}44`:"1px solid transparent",transition:"all 0.15s"}}>
+                <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:3}}>
+                  <div style={{width:20,height:20,borderRadius:5,background:hc,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:9,flexShrink:0}}>{h}</div>
+                  <span style={{fontSize:10,color:"#94a3b8",flex:1}}>Hall {h}</span>
+                  <span style={{background:"#22c55e22",color:"#22c55e",borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:700}}>✅ {s} booked</span>
+                  <span style={{fontSize:9,color:"#64748b"}}>/ {t.toLocaleString()}</span>
                 </div>
-              );
-            })}
+                <div style={{background:"#0f172a",borderRadius:99,overflow:"hidden",height:14,position:"relative"}}>
+                  <div style={{width:`${t/maxH*100}%`,background:hc+"44",height:"100%",borderRadius:99}}/>
+                  {s>0&&<div style={{width:`${s/maxH*100}%`,background:hc,height:"100%",borderRadius:99,position:"absolute",top:0,left:0}}/>}
+                </div>
+              </div>
+            );})}
           </div>
 
           {/* Top Countries */}
           <div style={{background:"#1e293b",borderRadius:12,padding:"14px 16px",border:"1px solid #334155"}}>
             <div style={{fontSize:12,fontWeight:700,color:"#f1f5f9",marginBottom:12}}>🌍 Top Countries <span style={{fontSize:9,color:"#475569",fontWeight:400}}>— click a row</span></div>
-            {topC.map(([country,{flag,n}],i)=>{
-              const act=panel===country;
-              const col=AC[i%AC.length];
-              const bookedCount=companies.filter(c=>c.country===country&&appts[c.name]?.date).length;
-              return(
-                <div key={country} onClick={()=>openPanel(country,flag,col,companies.filter(c=>c.country===country),true)}
-                  style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,padding:"5px 7px",borderRadius:8,cursor:"pointer",background:act?col+"22":"transparent",border:act?`1px solid ${col}44`:"1px solid transparent",transition:"all 0.15s"}}>
-                  <span style={{fontSize:14,flexShrink:0,width:22,textAlign:"center"}}>{flag}</span>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,alignItems:"center"}}>
-                      <span style={{fontSize:10,color:"#94a3b8",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:110}}>{country}</span>
-                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                        {bookedCount>0&&<span style={{background:"#22c55e22",color:"#22c55e",borderRadius:99,padding:"0 5px",fontSize:8,fontWeight:700}}>✅{bookedCount}</span>}
-                        <span style={{fontSize:10,color:col,fontWeight:700}}>{n}</span>
-                      </div>
+            {topC.map(([country,{flag,n}],i)=>{const act=panel===country;const col=AC[i%AC.length];const bc=companies.filter(c=>c.country===country&&appts[c.name]?.date).length;return(
+              <div key={country} onClick={()=>openPanel(country,flag,col,companies.filter(c=>c.country===country),true)}
+                style={{display:"flex",alignItems:"center",gap:7,marginBottom:7,padding:"5px 7px",borderRadius:8,cursor:"pointer",background:act?col+"22":"transparent",border:act?`1px solid ${col}44`:"1px solid transparent",transition:"all 0.15s"}}>
+                <span style={{fontSize:14,flexShrink:0,width:22,textAlign:"center"}}>{flag}</span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:2,alignItems:"center"}}>
+                    <span style={{fontSize:10,color:"#94a3b8",fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:110}}>{country}</span>
+                    <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                      {bc>0&&<span style={{background:"#22c55e22",color:"#22c55e",borderRadius:99,padding:"0 5px",fontSize:8,fontWeight:700}}>✅{bc}</span>}
+                      <span style={{fontSize:10,color:col,fontWeight:700}}>{n}</span>
                     </div>
-                    <Bar val={n} max={maxC} color={col} h={11}/>
                   </div>
+                  <Bar val={n} max={maxC} color={col} h={11}/>
                 </div>
-              );
-            })}
+              </div>
+            );})}
           </div>
         </div>
       </div>
@@ -395,7 +401,7 @@ function DashboardTab({companies,appts,onUpdate,acm}){
               <span style={{fontSize:18}}>{pIcon}</span>
               <span style={{fontSize:13,fontWeight:800,color:pColor,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{pLabel}</span>
               <span style={{background:pColor+"22",color:pColor,borderRadius:99,padding:"2px 9px",fontSize:10,fontWeight:700}}>{filteredPanel.all.length}</span>
-              <button onClick={()=>setPanel(null)} style={{background:"transparent",border:"none",color:"#64748b",cursor:"pointer",fontSize:16,padding:"0 2px",lineHeight:1}}>✕</button>
+              <button onClick={()=>setPanel(null)} style={{background:"transparent",border:"none",color:"#64748b",cursor:"pointer",fontSize:16,lineHeight:1}}>✕</button>
             </div>
             {pGrouped&&(
               <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -403,29 +409,20 @@ function DashboardTab({companies,appts,onUpdate,acm}){
                 <span style={{background:"#33415533",color:"#64748b",borderRadius:99,padding:"2px 10px",fontSize:9,fontWeight:700}}>⬜ {filteredPanel.unbooked.length} Unscheduled</span>
               </div>
             )}
-            <input value={pSearch} onChange={e=>setPSearch(e.target.value)} placeholder="🔍 Search companies..."
-              style={{width:"100%",padding:"6px 9px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,boxSizing:"border-box",outline:"none"}}/>
+            <input value={pSearch} onChange={e=>setPSearch(e.target.value)} placeholder="🔍 Search companies..." style={{width:"100%",padding:"6px 9px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,boxSizing:"border-box",outline:"none"}}/>
           </div>
           <div style={{overflowY:"auto",flex:1,padding:"10px 12px"}}>
             {filteredPanel.all.length===0&&<div style={{textAlign:"center",color:"#475569",marginTop:40,fontSize:12}}>No companies found.</div>}
             {pGrouped?(
               <>
-                {filteredPanel.booked.length>0&&(
-                  <>
-                    <div style={{fontSize:8,fontWeight:700,color:"#22c55e",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,padding:"4px 8px",background:"#22c55e11",borderRadius:6,border:"1px solid #22c55e22"}}>
-                      ✅ Booked — {filteredPanel.booked.length} companies
-                    </div>
-                    <CompanyList companies={filteredPanel.booked} appts={appts} onUpdate={onUpdate} acm={acm}/>
-                  </>
-                )}
-                {filteredPanel.unbooked.length>0&&(
-                  <>
-                    <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,marginTop:10,padding:"4px 8px",background:"#33415522",borderRadius:6,border:"1px solid #33415544"}}>
-                      ⬜ Unscheduled — {filteredPanel.unbooked.length} companies
-                    </div>
-                    <CompanyList companies={filteredPanel.unbooked} appts={appts} onUpdate={onUpdate} acm={acm}/>
-                  </>
-                )}
+                {filteredPanel.booked.length>0&&(<>
+                  <div style={{fontSize:8,fontWeight:700,color:"#22c55e",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,padding:"4px 8px",background:"#22c55e11",borderRadius:6,border:"1px solid #22c55e22"}}>✅ Booked — {filteredPanel.booked.length} companies</div>
+                  <CompanyList companies={filteredPanel.booked} appts={appts} onUpdate={onUpdate} acm={acm}/>
+                </>)}
+                {filteredPanel.unbooked.length>0&&(<>
+                  <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,marginTop:10,padding:"4px 8px",background:"#33415522",borderRadius:6,border:"1px solid #33415544"}}>⬜ Unscheduled — {filteredPanel.unbooked.length} companies</div>
+                  <CompanyList companies={filteredPanel.unbooked} appts={appts} onUpdate={onUpdate} acm={acm}/>
+                </>)}
               </>
             ):(
               <CompanyList companies={filteredPanel.all} appts={appts} onUpdate={onUpdate} acm={acm}/>
@@ -437,13 +434,9 @@ function DashboardTab({companies,appts,onUpdate,acm}){
   );
 }
 
-/* ── Business Areas Tab ───────────────────────────────────────────────────── */
+/* ── Business Areas ───────────────────────────────────────────────────────── */
 function AreasTab({companies,appts,onUpdate,acm}){
-  const [aSearch,setASearch]=useState("");
-  const [selArea,setSelArea]=useState(null);
-  const [hallF,setHallF]=useState("All");
-  const [cSearch,setCSearch]=useState("");
-
+  const [aSearch,setASearch]=useState("");const [selArea,setSelArea]=useState(null);const [hallF,setHallF]=useState("All");const [cSearch,setCSearch]=useState("");
   const allAreas=useMemo(()=>[...new Set(companies.flatMap(c=>c.areas))].sort(),[companies]);
   const areaCnt=useMemo(()=>{const m={};companies.forEach(c=>c.areas.forEach(a=>{m[a]=(m[a]||0)+1;}));return m;},[companies]);
   const filtAreas=allAreas.filter(a=>a.toLowerCase().includes(aSearch.toLowerCase()));
@@ -451,39 +444,28 @@ function AreasTab({companies,appts,onUpdate,acm}){
   ,[selArea,companies]);
   const filtered=useMemo(()=>selArea?companies.filter(c=>c.areas.includes(selArea)&&(hallF==="All"||c.hall===hallF)&&(!cSearch||c.name.toLowerCase().includes(cSearch.toLowerCase()))).sort((a,b)=>+a.hall-+b.hall):[]
   ,[selArea,hallF,cSearch,companies]);
-
   return(
     <div style={{display:"flex",flex:1,overflow:"hidden"}}>
       <div style={{width:250,background:"#1e293b",borderRight:"1px solid #334155",display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"10px 9px 7px"}}>
-          <input value={aSearch} onChange={e=>setASearch(e.target.value)} placeholder="🔎 Search business area..."
-            style={{width:"100%",padding:"7px 9px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,boxSizing:"border-box",outline:"none"}}/>
+          <input value={aSearch} onChange={e=>setASearch(e.target.value)} placeholder="🔎 Search business area..." style={{width:"100%",padding:"7px 9px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:10,boxSizing:"border-box",outline:"none"}}/>
           <div style={{fontSize:8,color:"#475569",marginTop:4,fontWeight:700,textTransform:"uppercase"}}>{filtAreas.length} areas</div>
         </div>
         <div style={{overflowY:"auto",flex:1,padding:"0 6px 10px"}}>
-          {filtAreas.map(a=>{
-            const active=selArea===a,ac=acm[a]||"#6366f1";
-            return(
-              <div key={a} onClick={()=>{setSelArea(a);setHallF("All");setCSearch("");}}
-                style={{padding:"6px 9px",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?"#1e1b4b":"transparent",border:active?`1px solid ${ac}`:"1px solid transparent",display:"flex",alignItems:"center",justifyContent:"space-between",gap:5}}>
-                <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
-                  <div style={{width:6,height:6,borderRadius:99,background:ac,flexShrink:0}}/>
-                  <span style={{fontSize:10,color:active?"#e0e7ff":"#94a3b8",fontWeight:active?700:400,overflow:"hidden",textOverflow:"ellipsis"}}>{a}</span>
-                </div>
-                <span style={{background:active?ac+"33":"#0f172a",color:active?ac:"#475569",borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:700,flexShrink:0}}>{areaCnt[a]||0}</span>
+          {filtAreas.map(a=>{const active=selArea===a,ac=acm[a]||"#6366f1";return(
+            <div key={a} onClick={()=>{setSelArea(a);setHallF("All");setCSearch("");}}
+              style={{padding:"6px 9px",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?"#1e1b4b":"transparent",border:active?`1px solid ${ac}`:"1px solid transparent",display:"flex",alignItems:"center",justifyContent:"space-between",gap:5}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+                <div style={{width:6,height:6,borderRadius:99,background:ac,flexShrink:0}}/>
+                <span style={{fontSize:10,color:active?"#e0e7ff":"#94a3b8",fontWeight:active?700:400,overflow:"hidden",textOverflow:"ellipsis"}}>{a}</span>
               </div>
-            );
-          })}
+              <span style={{background:active?ac+"33":"#0f172a",color:active?ac:"#475569",borderRadius:99,padding:"1px 6px",fontSize:8,fontWeight:700,flexShrink:0}}>{areaCnt[a]||0}</span>
+            </div>
+          );})}
         </div>
       </div>
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        {!selArea?(
-          <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
-            <div style={{fontSize:44}}>🏭</div>
-            <div style={{fontSize:14,fontWeight:700,color:"#475569"}}>Select a Business Area</div>
-            <div style={{fontSize:12,color:"#334155"}}>Choose from the left panel</div>
-          </div>
-        ):(
+        {!selArea?(<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}><div style={{fontSize:44}}>🏭</div><div style={{fontSize:14,fontWeight:700,color:"#475569"}}>Select a Business Area</div></div>):(
           <>
             <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"10px 14px"}}>
               <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:7}}>
@@ -492,14 +474,8 @@ function AreasTab({companies,appts,onUpdate,acm}){
                 <span style={{background:(acm[selArea]||"#6366f1")+"22",color:acm[selArea]||"#6366f1",borderRadius:99,padding:"2px 8px",fontSize:9,fontWeight:700}}>{filtered.length.toLocaleString()} companies</span>
               </div>
               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
-                {["All",...hallsForArea].map(h=>(
-                  <button key={h} onClick={()=>setHallF(h)}
-                    style={{padding:"2px 8px",border:`1.5px solid ${h==="All"?"#6366f1":HC[h]||"#475569"}`,borderRadius:99,background:hallF===h?(h==="All"?"#6366f1":HC[h]||"#475569"):"transparent",color:hallF===h?"#fff":(h==="All"?"#818cf8":HC[h]||"#94a3b8"),fontWeight:700,fontSize:9,cursor:"pointer"}}>
-                    {h==="All"?"All Halls":`Hall ${h}`}
-                  </button>
-                ))}
-                <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..."
-                  style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:130}}/>
+                {["All",...hallsForArea].map(h=>(<button key={h} onClick={()=>setHallF(h)} style={{padding:"2px 8px",border:`1.5px solid ${h==="All"?"#6366f1":HC[h]||"#475569"}`,borderRadius:99,background:hallF===h?(h==="All"?"#6366f1":HC[h]||"#475569"):"transparent",color:hallF===h?"#fff":(h==="All"?"#818cf8":HC[h]||"#94a3b8"),fontWeight:700,fontSize:9,cursor:"pointer"}}>{h==="All"?"All Halls":`Hall ${h}`}</button>))}
+                <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..." style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:130}}/>
               </div>
             </div>
             <div style={{overflowY:"auto",flex:1,padding:"10px 13px"}}>
@@ -513,85 +489,67 @@ function AreasTab({companies,appts,onUpdate,acm}){
   );
 }
 
-/* ── Hall Locations Tab ───────────────────────────────────────────────────── */
+/* ── Hall Locations ───────────────────────────────────────────────────────── */
 function HallsTab({companies,appts,onUpdate,acm}){
-  const [selHall,setSelHall]=useState(null);
-  const [areaF,setAreaF]=useState("All");
-  const [cSearch,setCSearch]=useState("");
-
+  const [selHall,setSelHall]=useState(null);const [areaF,setAreaF]=useState("All");const [cSearch,setCSearch]=useState("");
   const halls=useMemo(()=>[...new Set(companies.map(c=>c.hall))].sort((a,b)=>+a-+b),[companies]);
   useEffect(()=>{if(halls.length&&!selHall)setSelHall(halls[0]);},[halls]);
   const hCos=useMemo(()=>selHall?companies.filter(c=>c.hall===selHall):[],[companies,selHall]);
   const hAreas=useMemo(()=>[...new Set(hCos.flatMap(c=>c.areas))].sort(),[hCos]);
   const filtered=useMemo(()=>hCos.filter(c=>(areaF==="All"||c.areas.includes(areaF))&&(!cSearch||c.name.toLowerCase().includes(cSearch.toLowerCase()))),[hCos,areaF,cSearch]);
   const booked=hCos.filter(c=>appts[c.name]?.date).length;
-
   return(
     <div style={{display:"flex",flex:1,overflow:"hidden"}}>
       <div style={{width:160,background:"#1e293b",borderRight:"1px solid #334155",display:"flex",flexDirection:"column",flexShrink:0,padding:"9px 7px"}}>
         <div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.5px",marginBottom:6,paddingLeft:3}}>Exhibition Halls</div>
-        {halls.map(h=>{
-          const cnt=companies.filter(c=>c.hall===h).length;
-          const asgn=companies.filter(c=>c.hall===h&&appts[c.name]?.date).length;
-          const active=selHall===h,hc=HC[h]||"#475569";
-          return(
-            <div key={h} onClick={()=>{setSelHall(h);setAreaF("All");setCSearch("");}}
-              style={{padding:"8px 8px",borderRadius:8,marginBottom:3,cursor:"pointer",background:active?hc+"22":"transparent",border:active?`1.5px solid ${hc}`:"1.5px solid transparent"}}>
-              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                <div style={{width:26,height:26,borderRadius:6,background:hc,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:11,flexShrink:0}}>{h}</div>
-                <div>
-                  <div style={{fontSize:10,fontWeight:700,color:active?hc:"#94a3b8"}}>Hall {h}</div>
-                  <div style={{fontSize:8,color:"#64748b"}}>{cnt.toLocaleString()} · {asgn} bkd</div>
-                </div>
+        {halls.map(h=>{const cnt=companies.filter(c=>c.hall===h).length,asgn=companies.filter(c=>c.hall===h&&appts[c.name]?.date).length,active=selHall===h,hc=HC[h]||"#475569";return(
+          <div key={h} onClick={()=>{setSelHall(h);setAreaF("All");setCSearch("");}} style={{padding:"8px 8px",borderRadius:8,marginBottom:3,cursor:"pointer",background:active?hc+"22":"transparent",border:active?`1.5px solid ${hc}`:"1.5px solid transparent"}}>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <div style={{width:26,height:26,borderRadius:6,background:hc,display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:11,flexShrink:0}}>{h}</div>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:active?hc:"#94a3b8"}}>Hall {h}</div>
+                <div style={{fontSize:8,color:"#64748b"}}>{cnt.toLocaleString()} · {asgn} bkd</div>
               </div>
             </div>
-          );
-        })}
+          </div>
+        );})}
       </div>
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        {selHall&&(
-          <>
-            <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"10px 14px"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-                <div style={{width:40,height:40,borderRadius:9,background:HC[selHall]||"#475569",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:17,flexShrink:0}}>{selHall}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontSize:14,fontWeight:800,color:"#f1f5f9"}}>Hall {selHall}</div>
-                  <div style={{fontSize:9,color:"#64748b"}}>{hCos.length.toLocaleString()} companies · {hAreas.length} business areas · {booked} booked</div>
-                </div>
-                <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                  {DATES.map(d=>{const n=hCos.filter(c=>appts[c.name]?.date===d).length;return n?<span key={d} style={{background:DC[d]+"22",color:DC[d],borderRadius:99,padding:"2px 6px",fontSize:8,fontWeight:700}}>{d}: {n}</span>:null;})}
-                </div>
+        {selHall&&(<>
+          <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"10px 14px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+              <div style={{width:40,height:40,borderRadius:9,background:HC[selHall]||"#475569",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:17,flexShrink:0}}>{selHall}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#f1f5f9"}}>Hall {selHall}</div>
+                <div style={{fontSize:9,color:"#64748b"}}>{hCos.length.toLocaleString()} companies · {hAreas.length} business areas · {booked} booked</div>
               </div>
-              <div style={{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center"}}>
-                <button onClick={()=>setAreaF("All")} style={{padding:"2px 7px",border:"1.5px solid #4338ca",borderRadius:99,background:areaF==="All"?"#4338ca":"transparent",color:areaF==="All"?"#fff":"#818cf8",fontWeight:700,fontSize:8,cursor:"pointer"}}>All Areas</button>
-                {hAreas.map(a=>(
-                  <button key={a} onClick={()=>setAreaF(a)} style={{padding:"2px 7px",border:`1.5px solid ${acm[a]||"#475569"}`,borderRadius:99,background:areaF===a?(acm[a]||"#475569"):"transparent",color:areaF===a?"#fff":acm[a]||"#94a3b8",fontWeight:700,fontSize:8,cursor:"pointer"}}>{a.length>20?a.slice(0,18)+"…":a}</button>
-                ))}
-                <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..."
-                  style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:130}}/>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                {DATES.map(d=>{const n=hCos.filter(c=>appts[c.name]?.date===d).length;return n?<span key={d} style={{background:DC[d]+"22",color:DC[d],borderRadius:99,padding:"2px 6px",fontSize:8,fontWeight:700}}>{d}: {n}</span>:null;})}
               </div>
             </div>
-            <div style={{overflowY:"auto",flex:1,padding:"10px 13px"}}>
-              <div style={{fontSize:9,color:"#64748b",marginBottom:6}}>{filtered.length.toLocaleString()} companies shown</div>
-              <CompanyList companies={filtered} appts={appts} onUpdate={onUpdate} acm={acm} highlight={areaF!=="All"?areaF:null}/>
+            <div style={{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center"}}>
+              <button onClick={()=>setAreaF("All")} style={{padding:"2px 7px",border:"1.5px solid #4338ca",borderRadius:99,background:areaF==="All"?"#4338ca":"transparent",color:areaF==="All"?"#fff":"#818cf8",fontWeight:700,fontSize:8,cursor:"pointer"}}>All Areas</button>
+              {hAreas.map(a=>(<button key={a} onClick={()=>setAreaF(a)} style={{padding:"2px 7px",border:`1.5px solid ${acm[a]||"#475569"}`,borderRadius:99,background:areaF===a?(acm[a]||"#475569"):"transparent",color:areaF===a?"#fff":acm[a]||"#94a3b8",fontWeight:700,fontSize:8,cursor:"pointer"}}>{a.length>20?a.slice(0,18)+"…":a}</button>))}
+              <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..." style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:130}}/>
             </div>
-          </>
-        )}
+          </div>
+          <div style={{overflowY:"auto",flex:1,padding:"10px 13px"}}>
+            <div style={{fontSize:9,color:"#64748b",marginBottom:6}}>{filtered.length.toLocaleString()} companies shown</div>
+            <CompanyList companies={filtered} appts={appts} onUpdate={onUpdate} acm={acm} highlight={areaF!=="All"?areaF:null}/>
+          </div>
+        </>)}
       </div>
     </div>
   );
 }
 
-/* ── Calendar Tab ─────────────────────────────────────────────────────────── */
+/* ── Calendar ─────────────────────────────────────────────────────────────── */
 function CalendarTab({companies,appts,onUpdate,acm}){
-  const [selDate,setSelDate]=useState(null);
-  const [cSearch,setCSearch]=useState("");
-
+  const [selDate,setSelDate]=useState(null);const [cSearch,setCSearch]=useState("");
   const byDate=useMemo(()=>{const m={};DATES.forEach(d=>m[d]=[]);companies.forEach(c=>{const d=appts[c.name]?.date;if(d&&m[d])m[d].push(c);});return m;},[appts,companies]);
   const unassigned=useMemo(()=>companies.filter(c=>!appts[c.name]?.date),[appts,companies]);
   const totalBooked=companies.filter(c=>appts[c.name]?.date).length;
   const dayCompanies=selDate?byDate[selDate].filter(c=>!cSearch||c.name.toLowerCase().includes(cSearch.toLowerCase())):[];
-
   return(
     <div style={{display:"flex",flex:1,flexDirection:"column",overflow:"hidden"}}>
       <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"12px 15px"}}>
@@ -604,8 +562,7 @@ function CalendarTab({companies,appts,onUpdate,acm}){
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
           {DATES.map((d,i)=>{const cnt=byDate[d].length,active=selDate===d;return(
-            <div key={d} onClick={()=>setSelDate(active?null:d)}
-              style={{borderRadius:10,padding:"10px 8px",background:active?DC[d]+"33":DC[d]+"11",border:`2px solid ${active?DC[d]:DC[d]+"44"}`,cursor:"pointer",textAlign:"center"}}>
+            <div key={d} onClick={()=>setSelDate(active?null:d)} style={{borderRadius:10,padding:"10px 8px",background:active?DC[d]+"33":DC[d]+"11",border:`2px solid ${active?DC[d]:DC[d]+"44"}`,cursor:"pointer",textAlign:"center"}}>
               <div style={{fontSize:8,color:DC[d],fontWeight:700,textTransform:"uppercase"}}>{DDAYS[i]}</div>
               <div style={{fontSize:22,fontWeight:800,color:DC[d],lineHeight:1.1,margin:"3px 0"}}>{d.split(" ")[0]}</div>
               <div style={{fontSize:8,color:DC[d],opacity:0.7,marginBottom:5}}>May 2026</div>
@@ -619,8 +576,7 @@ function CalendarTab({companies,appts,onUpdate,acm}){
           <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:10}}>
             <div style={{width:7,height:7,borderRadius:99,background:DC[selDate]}}/>
             <span style={{fontSize:12,fontWeight:700,color:DC[selDate]}}>{selDate} — {byDate[selDate].length} appointments</span>
-            <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Filter..."
-              style={{marginLeft:"auto",padding:"4px 9px",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:140}}/>
+            <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Filter..." style={{marginLeft:"auto",padding:"4px 9px",background:"#1e293b",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:140}}/>
           </div>
           {dayCompanies.length===0&&<div style={{textAlign:"center",color:"#475569",marginTop:40,fontSize:12}}>{byDate[selDate].length===0?"No appointments for this day.":"No companies match."}</div>}
           <CompanyList companies={dayCompanies} appts={appts} onUpdate={onUpdate} acm={acm} calendarView={true}/>
@@ -628,34 +584,27 @@ function CalendarTab({companies,appts,onUpdate,acm}){
       ):(
         <div style={{flex:1,overflowY:"auto",padding:"12px 15px"}}>
           <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:10,marginBottom:14}}>
-            {DATES.map(d=>(
-              <div key={d}>
-                <div style={{fontSize:8,fontWeight:700,color:DC[d],marginBottom:5,padding:"4px 7px",background:DC[d]+"11",borderRadius:5,border:`1px solid ${DC[d]}33`,textAlign:"center",textTransform:"uppercase"}}>{d} · {byDate[d].length}</div>
-                {byDate[d].slice(0,8).map(c=>{const r=RATINGS.find(x=>x.id===appts[c.name]?.rating);return(
-                  <div key={c.name+c.stand} style={{background:"#1e293b",borderRadius:7,padding:"6px 8px",marginBottom:5,border:`1px solid ${DC[d]}33`,cursor:"pointer"}} onClick={()=>setSelDate(d)}>
-                    <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:2}}>
-                      <div style={{width:16,height:16,borderRadius:4,background:HC[c.hall]||"#475569",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:7,flexShrink:0}}>{c.hall}</div>
-                      <div style={{fontSize:9,fontWeight:700,color:"#f1f5f9",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{c.name}</div>
-                    </div>
-                    <div style={{fontSize:7,color:"#64748b"}}>📍{c.stand} {c.flag} {c.country}</div>
-                    {r&&<div style={{fontSize:7,color:r.color,marginTop:1}}>{r.label}</div>}
-                    {appts[c.name]?.note&&<div style={{fontSize:7,color:"#94a3b8",fontStyle:"italic",marginTop:1}}>📝 {appts[c.name].note.slice(0,35)}…</div>}
+            {DATES.map(d=>(<div key={d}>
+              <div style={{fontSize:8,fontWeight:700,color:DC[d],marginBottom:5,padding:"4px 7px",background:DC[d]+"11",borderRadius:5,border:`1px solid ${DC[d]}33`,textAlign:"center",textTransform:"uppercase"}}>{d} · {byDate[d].length}</div>
+              {byDate[d].slice(0,8).map(c=>{const r=RATINGS.find(x=>x.id===appts[c.name]?.rating);return(
+                <div key={c.name+c.stand} style={{background:"#1e293b",borderRadius:7,padding:"6px 8px",marginBottom:5,border:`1px solid ${DC[d]}33`,cursor:"pointer"}} onClick={()=>setSelDate(d)}>
+                  <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:2}}>
+                    <div style={{width:16,height:16,borderRadius:4,background:HC[c.hall]||"#475569",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:7,flexShrink:0}}>{c.hall}</div>
+                    <div style={{fontSize:9,fontWeight:700,color:"#f1f5f9",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>{c.name}</div>
                   </div>
-                );})}
-                {byDate[d].length>8&&<div onClick={()=>setSelDate(d)} style={{textAlign:"center",fontSize:8,color:DC[d],cursor:"pointer",padding:"4px"}}>+{byDate[d].length-8} more →</div>}
-                {byDate[d].length===0&&<div style={{textAlign:"center",color:"#334155",fontSize:9,marginTop:8}}>No appointments</div>}
-              </div>
-            ))}
+                  <div style={{fontSize:7,color:"#64748b"}}>📍{c.stand} {c.flag} {c.country}</div>
+                  {r&&<div style={{fontSize:7,color:r.color,marginTop:1}}>{r.label}</div>}
+                  {appts[c.name]?.note&&<div style={{fontSize:7,color:"#94a3b8",fontStyle:"italic",marginTop:1}}>📝 {appts[c.name].note.slice(0,35)}…</div>}
+                </div>
+              );})}
+              {byDate[d].length>8&&<div onClick={()=>setSelDate(d)} style={{textAlign:"center",fontSize:8,color:DC[d],cursor:"pointer",padding:"4px"}}>+{byDate[d].length-8} more →</div>}
+              {byDate[d].length===0&&<div style={{textAlign:"center",color:"#334155",fontSize:9,marginTop:8}}>No appointments</div>}
+            </div>))}
           </div>
           <div style={{borderTop:"1px solid #334155",paddingTop:10}}>
             <div style={{fontSize:9,fontWeight:700,color:"#64748b",marginBottom:6}}>⬜ Unscheduled ({unassigned.length.toLocaleString()})</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
-              {unassigned.slice(0,40).map(c=>(
-                <div key={c.name+c.stand} style={{background:"#1e293b",borderRadius:5,padding:"2px 7px",border:"1px solid #334155",fontSize:8}}>
-                  <span style={{color:"#94a3b8",fontWeight:600}}>{c.name}</span>
-                  <span style={{color:HC[c.hall]||"#475569",marginLeft:4,fontWeight:700}}>H{c.hall}</span>
-                </div>
-              ))}
+              {unassigned.slice(0,40).map(c=>(<div key={c.name+c.stand} style={{background:"#1e293b",borderRadius:5,padding:"2px 7px",border:"1px solid #334155",fontSize:8}}><span style={{color:"#94a3b8",fontWeight:600}}>{c.name}</span><span style={{color:HC[c.hall]||"#475569",marginLeft:4,fontWeight:700}}>H{c.hall}</span></div>))}
               {unassigned.length>40&&<div style={{fontSize:8,color:"#475569",padding:"2px 7px"}}>+{(unassigned.length-40).toLocaleString()} more...</div>}
             </div>
           </div>
@@ -665,55 +614,35 @@ function CalendarTab({companies,appts,onUpdate,acm}){
   );
 }
 
-/* ── Countries Tab ────────────────────────────────────────────────────────── */
+/* ── Countries ────────────────────────────────────────────────────────────── */
 function CountriesTab({companies,appts,onUpdate,acm}){
-  const [selCountry,setSelCountry]=useState(null);
-  const [cSearch,setCSearch]=useState("");
-  const [hallF,setHallF]=useState("All");
-  const [ratingF,setRatingF]=useState("All");
-
-  const countries=useMemo(()=>{
-    const m={};
-    companies.forEach(c=>{if(!c.country)return;if(!m[c.country])m[c.country]={country:c.country,flag:c.flag,companies:[]};m[c.country].companies.push(c);});
-    return Object.values(m).sort((a,b)=>b.companies.length-a.companies.length);
-  },[companies]);
-
+  const [selCountry,setSelCountry]=useState(null);const [cSearch,setCSearch]=useState("");const [hallF,setHallF]=useState("All");const [ratingF,setRatingF]=useState("All");
+  const countries=useMemo(()=>{const m={};companies.forEach(c=>{if(!c.country)return;if(!m[c.country])m[c.country]={country:c.country,flag:c.flag,companies:[]};m[c.country].companies.push(c);});return Object.values(m).sort((a,b)=>b.companies.length-a.companies.length);},[companies]);
   const selEntry=countries.find(x=>x.country===selCountry);
   const hallsInC=selEntry?[...new Set(selEntry.companies.map(c=>c.hall))].sort((a,b)=>+a-+b):[];
   const selCos=useMemo(()=>selCountry?companies.filter(c=>c.country===selCountry&&(hallF==="All"||c.hall===hallF)&&(ratingF==="All"||appts[c.name]?.rating===ratingF)&&(!cSearch||c.name.toLowerCase().includes(cSearch.toLowerCase()))):[]
   ,[selCountry,hallF,ratingF,cSearch,companies,appts]);
-
   return(
     <div style={{display:"flex",flex:1,overflow:"hidden"}}>
       <div style={{width:190,background:"#1e293b",borderRight:"1px solid #334155",display:"flex",flexDirection:"column",flexShrink:0}}>
         <div style={{padding:"9px 8px 5px"}}><div style={{fontSize:8,fontWeight:700,color:"#64748b",textTransform:"uppercase",letterSpacing:"0.5px"}}>{countries.length} Countries</div></div>
         <div style={{overflowY:"auto",flex:1,padding:"0 6px 10px"}}>
-          {countries.map(({country,flag,companies:cos})=>{
-            const active=selCountry===country,booked=cos.filter(c=>appts[c.name]?.date).length;
-            return(
-              <div key={country} onClick={()=>{setSelCountry(country);setHallF("All");setRatingF("All");setCSearch("");}}
-                style={{padding:"7px 8px",borderRadius:8,marginBottom:2,cursor:"pointer",background:active?"#1e1b4b":"transparent",border:active?"1px solid #6366f1":"1px solid transparent"}}>
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:16,flexShrink:0}}>{flag}</span>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:10,fontWeight:700,color:active?"#e0e7ff":"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{country}</div>
-                    <div style={{fontSize:8,color:"#475569"}}>{cos.length.toLocaleString()} cos · {booked} booked</div>
-                  </div>
-                  <span style={{background:active?"#6366f122":"#0f172a",color:active?"#818cf8":"#475569",borderRadius:99,padding:"1px 5px",fontSize:8,fontWeight:700,flexShrink:0}}>{cos.length}</span>
+          {countries.map(({country,flag,companies:cos})=>{const active=selCountry===country,booked=cos.filter(c=>appts[c.name]?.date).length;return(
+            <div key={country} onClick={()=>{setSelCountry(country);setHallF("All");setRatingF("All");setCSearch("");}} style={{padding:"7px 8px",borderRadius:8,marginBottom:2,cursor:"pointer",background:active?"#1e1b4b":"transparent",border:active?"1px solid #6366f1":"1px solid transparent"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontSize:16,flexShrink:0}}>{flag}</span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:10,fontWeight:700,color:active?"#e0e7ff":"#94a3b8",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{country}</div>
+                  <div style={{fontSize:8,color:"#475569"}}>{cos.length.toLocaleString()} · {booked} booked</div>
                 </div>
+                <span style={{background:active?"#6366f122":"#0f172a",color:active?"#818cf8":"#475569",borderRadius:99,padding:"1px 5px",fontSize:8,fontWeight:700,flexShrink:0}}>{cos.length}</span>
               </div>
-            );
-          })}
+            </div>
+          );})}
         </div>
       </div>
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        {!selCountry?(
-          <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
-            <div style={{fontSize:44}}>🌍</div>
-            <div style={{fontSize:14,fontWeight:700,color:"#475569"}}>Select a Country</div>
-            <div style={{fontSize:12,color:"#334155"}}>Browse companies by country of origin</div>
-          </div>
-        ):(
+        {!selCountry?(<div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}><div style={{fontSize:44}}>🌍</div><div style={{fontSize:14,fontWeight:700,color:"#475569"}}>Select a Country</div></div>):(
           <>
             <div style={{background:"#1e293b",borderBottom:"1px solid #334155",padding:"10px 14px"}}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
@@ -728,16 +657,11 @@ function CountriesTab({companies,appts,onUpdate,acm}){
               </div>
               <div style={{display:"flex",gap:3,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:8,color:"#64748b",fontWeight:700,textTransform:"uppercase"}}>Hall:</span>
-                {["All",...hallsInC].map(h=>(
-                  <button key={h} onClick={()=>setHallF(h)} style={{padding:"2px 7px",border:`1.5px solid ${h==="All"?"#6366f1":HC[h]||"#475569"}`,borderRadius:99,background:hallF===h?(h==="All"?"#6366f1":HC[h]||"#475569"):"transparent",color:hallF===h?"#fff":(h==="All"?"#818cf8":HC[h]||"#94a3b8"),fontWeight:700,fontSize:8,cursor:"pointer"}}>{h==="All"?"All":`H${h}`}</button>
-                ))}
+                {["All",...hallsInC].map(h=>(<button key={h} onClick={()=>setHallF(h)} style={{padding:"2px 7px",border:`1.5px solid ${h==="All"?"#6366f1":HC[h]||"#475569"}`,borderRadius:99,background:hallF===h?(h==="All"?"#6366f1":HC[h]||"#475569"):"transparent",color:hallF===h?"#fff":(h==="All"?"#818cf8":HC[h]||"#94a3b8"),fontWeight:700,fontSize:8,cursor:"pointer"}}>{h==="All"?"All":`H${h}`}</button>))}
                 <span style={{fontSize:8,color:"#64748b",fontWeight:700,textTransform:"uppercase",marginLeft:4}}>Status:</span>
                 <button onClick={()=>setRatingF("All")} style={{padding:"2px 7px",border:"1.5px solid #4338ca",borderRadius:99,background:ratingF==="All"?"#4338ca":"transparent",color:ratingF==="All"?"#fff":"#818cf8",fontWeight:700,fontSize:8,cursor:"pointer"}}>All</button>
-                {RATINGS.map(r=>(
-                  <button key={r.id} onClick={()=>setRatingF(r.id)} style={{padding:"2px 7px",border:`1.5px solid ${r.color}`,borderRadius:99,background:ratingF===r.id?r.color:"transparent",color:ratingF===r.id?"#0f172a":r.color,fontWeight:700,fontSize:8,cursor:"pointer"}}>{r.label}</button>
-                ))}
-                <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..."
-                  style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:120}}/>
+                {RATINGS.map(r=>(<button key={r.id} onClick={()=>setRatingF(r.id)} style={{padding:"2px 7px",border:`1.5px solid ${r.color}`,borderRadius:99,background:ratingF===r.id?r.color:"transparent",color:ratingF===r.id?"#0f172a":r.color,fontWeight:700,fontSize:8,cursor:"pointer"}}>{r.label}</button>))}
+                <input value={cSearch} onChange={e=>setCSearch(e.target.value)} placeholder="🔍 Company..." style={{marginLeft:"auto",padding:"3px 8px",background:"#0f172a",border:"1px solid #334155",borderRadius:7,color:"#e2e8f0",fontSize:9,outline:"none",width:120}}/>
               </div>
             </div>
             <div style={{overflowY:"auto",flex:1,padding:"10px 13px"}}>
@@ -751,12 +675,9 @@ function CountriesTab({companies,appts,onUpdate,acm}){
   );
 }
 
-/* ── Upload Screen ────────────────────────────────────────────────────────── */
+/* ── Manual Upload Fallback ───────────────────────────────────────────────── */
 function UploadScreen({onData}){
-  const [drag,setDrag]=useState(false);
-  const [error,setError]=useState("");
-  const [loading,setLoading]=useState(false);
-
+  const [drag,setDrag]=useState(false);const [error,setError]=useState("");const [loading,setLoading]=useState(false);
   const process=file=>{
     setLoading(true);setError("");
     const r=new FileReader();
@@ -764,41 +685,34 @@ function UploadScreen({onData}){
       try{
         const wb=XLSX.read(e.target.result,{type:"array"});
         const cos=parseExcel(wb);
-        if(!cos.length){setError("No companies found. Ensure the sheet has: COMPANY NAME, CONTACT INFO, BUSINESS AREAS, HALL LOCATION columns.");setLoading(false);return;}
-        try{localStorage.setItem(SK_C,JSON.stringify(cos));}catch(ex){}
+        if(!cos.length){setError("No companies found. Check columns: COMPANY NAME, CONTACT INFO, BUSINESS AREAS, HALL LOCATION.");setLoading(false);return;}
+        window.dbSaveCompanies(cos);
         onData(cos);
-      }catch(err){setError("Error reading file: "+err.message);setLoading(false);}
+      }catch(err){setError("Error: "+err.message);setLoading(false);}
     };
     r.readAsArrayBuffer(file);
   };
-
   return(
     <div style={{flex:1,display:"flex",alignItems:"center",justifyContent:"center",padding:20,background:"#0f172a"}}>
       <div style={{background:"#1e293b",borderRadius:16,padding:"36px 44px",maxWidth:500,width:"100%",border:"1px solid #334155",textAlign:"center"}}>
         <div style={{fontSize:48,marginBottom:10}}>📊</div>
-        <div style={{fontSize:20,fontWeight:800,color:"#f1f5f9",marginBottom:6}}>Upload Required Team Excel</div>
-        <div style={{fontSize:11,color:"#64748b",marginBottom:20,lineHeight:1.8}}>
-          Upload the <b style={{color:"#818cf8"}}>SAHA EXPO 2026 "Required Team"</b> Excel file.<br/>
-          All companies will be loaded automatically.<br/>
-          <b style={{color:"#22c55e"}}>Saved in your browser</b> — no re-upload needed next time. 🎉
+        <div style={{fontSize:18,fontWeight:800,color:"#f1f5f9",marginBottom:6}}>Upload Company Data</div>
+        <div style={{fontSize:11,color:"#64748b",marginBottom:20,lineHeight:1.9}}>
+          The file <b style={{color:"#818cf8"}}>team-data.xlsx</b> was not found automatically.<br/>
+          Upload it once — it saves to Firebase so <b style={{color:"#22c55e"}}>everyone sees it automatically</b> from now on.
         </div>
-        <div
-          onDragOver={e=>{e.preventDefault();setDrag(true);}}
-          onDragLeave={()=>setDrag(false)}
+        <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)}
           onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)process(f);}}
           style={{border:`2px dashed ${drag?"#6366f1":"#334155"}`,borderRadius:12,padding:"28px 16px",marginBottom:14,background:drag?"#1e1b4b":"#0f172a",cursor:"pointer"}}>
           <div style={{fontSize:28,marginBottom:6}}>📂</div>
-          <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>Drag & drop your .xlsx or .xls file here, or</div>
+          <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>Drag & drop your .xlsx / .xls file here, or</div>
           <label style={{display:"inline-block",padding:"9px 22px",background:"linear-gradient(135deg,#4338ca,#6366f1)",color:"#fff",borderRadius:8,fontSize:12,fontWeight:700,cursor:"pointer"}}>
             📁 Browse & Upload
             <input type="file" accept=".xlsx,.xls" onChange={e=>{const f=e.target.files[0];if(f)process(f);}} style={{display:"none"}}/>
           </label>
         </div>
-        {loading&&<div style={{color:"#818cf8",fontSize:12,padding:"10px",background:"#1e293b",borderRadius:8,marginBottom:8}}>⏳ Parsing all companies, please wait...</div>}
+        {loading&&<div style={{color:"#818cf8",fontSize:12,padding:"10px",background:"#1e293b",borderRadius:8,marginBottom:8}}>⏳ Parsing companies, saving to Firebase...</div>}
         {error&&<div style={{color:"#ef4444",fontSize:10,marginTop:8,background:"#ef444422",padding:"10px 12px",borderRadius:8,textAlign:"left"}}>{error}</div>}
-        <div style={{marginTop:14,fontSize:9,color:"#475569",lineHeight:1.8}}>
-          Expected columns: <b style={{color:"#64748b"}}>SR · COMPANY NAME · CONTACT INFO · ABOUT · BUSINESS AREAS · HALL LOCATION</b>
-        </div>
       </div>
     </div>
   );
@@ -810,39 +724,65 @@ function App(){
   const [companies,setCompanies]=useState([]);
   const [appts,setAppts]=useState({});
   const [loaded,setLoaded]=useState(false);
+  const [loadMsg,setLoadMsg]=useState("Loading...");
+  const [syncStatus,setSyncStatus]=useState("connecting");
   const acm=useMemo(()=>buildAcm(companies),[companies]);
 
   useEffect(()=>{
-    try{
-      const ac=localStorage.getItem(SK_A);if(ac)setAppts(JSON.parse(ac));
-      const cc=localStorage.getItem(SK_C);if(cc)setCompanies(JSON.parse(cc));
-    }catch(e){}
-    setTimeout(()=>setLoaded(true),300);
+    const init=async()=>{
+      // ── 1. Start listening to appointments (Firebase real-time) ──────────
+      if(FB_OK){
+        window.dbOnAppts(data=>{
+          setAppts(data);
+          setSyncStatus("live");
+        });
+      } else {
+        try{const a=localStorage.getItem('saha_appts');if(a)setAppts(JSON.parse(a));}catch(e){}
+        setSyncStatus("local");
+      }
 
-    // Real-time sync across browser tabs
-    const onStorage=e=>{
+      // ── 2. Load company data ─────────────────────────────────────────────
+      // Priority: GitHub file → Firebase → localStorage
+      let cos=null;
+
+      // a) Try auto-load Excel from GitHub repo
+      setLoadMsg("Loading company data from repository...");
       try{
-        if(e.key===SK_A&&e.newValue)setAppts(JSON.parse(e.newValue));
-        if(e.key===SK_C&&e.newValue)setCompanies(JSON.parse(e.newValue));
-        if(e.key===SK_C&&!e.newValue)setCompanies([]);
-      }catch(ex){}
+        const res=await fetch(EXCEL_FILE,{cache:"no-cache"});
+        if(res.ok){
+          const buf=await res.arrayBuffer();
+          const wb=XLSX.read(buf,{type:"array"});
+          cos=parseExcel(wb);
+          if(cos&&cos.length){
+            window.dbSaveCompanies(cos);
+          }
+        }
+      }catch(e){}
+
+      // b) Firebase fallback
+      if(!cos||!cos.length){
+        setLoadMsg("Loading from shared cloud storage...");
+        cos=await window.dbLoadCompanies();
+      }
+
+      // c) localStorage last resort
+      if(!cos||!cos.length){
+        try{const c=localStorage.getItem('saha_cos');if(c)cos=JSON.parse(c);}catch(e){}
+      }
+
+      if(cos&&cos.length)setCompanies(cos);
+      setLoaded(true);
     };
-    window.addEventListener('storage',onStorage);
-    return()=>window.removeEventListener('storage',onStorage);
+    init();
   },[]);
 
   const onUpdate=useCallback((name,field,val)=>{
     setAppts(prev=>{
       const next={...prev,[name]:{...(prev[name]||{}),[field]:val}};
-      try{localStorage.setItem(SK_A,JSON.stringify(next));}catch(e){}
+      window.dbSaveAppts(next);
       return next;
     });
   },[]);
-
-  const clearAndReupload=()=>{
-    try{localStorage.removeItem(SK_C);}catch(e){}
-    setCompanies([]);
-  };
 
   const totalBooked=companies.filter(c=>appts[c.name]?.date).length;
   const importantCnt=companies.filter(c=>appts[c.name]?.rating==="important").length;
@@ -850,39 +790,39 @@ function App(){
 
   const TABS=[
     {id:"dashboard",icon:"📊",label:"Dashboard"},
-    {id:"areas",    icon:"🏷️", label:"Business Areas"},
-    {id:"halls",    icon:"🏛️", label:"Hall Locations"},
-    {id:"calendar", icon:"📅", label:"Calendar"},
-    {id:"countries",icon:"🌍", label:"Countries"},
+    {id:"areas",    icon:"🏷️",label:"Business Areas"},
+    {id:"halls",    icon:"🏛️",label:"Hall Locations"},
+    {id:"calendar", icon:"📅",label:"Calendar"},
+    {id:"countries",icon:"🌍",label:"Countries"},
   ];
 
   if(!loaded)return(
-    <div style={{background:"#0f172a",height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,color:"#475569"}}>
+    <div style={{background:"#0f172a",height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14}}>
       <div style={{width:36,height:36,border:"3px solid #334155",borderTop:"3px solid #6366f1",borderRadius:"50%",animation:"spin 0.8s linear infinite"}}/>
-      <div style={{fontSize:12}}>Loading saved data...</div>
+      <div style={{fontSize:12,color:"#475569"}}>{loadMsg}</div>
     </div>
   );
 
-  if(companies.length===0)return(
+  if(!companies.length)return(
     <div style={{height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{background:"linear-gradient(135deg,#1e1b4b,#4338ca)",padding:"12px 20px",borderBottom:"1px solid #312e81",flexShrink:0}}>
         <div style={{fontSize:15,fontWeight:800,color:"#fff"}}>SAHA EXPO 2026 — Team Planner</div>
-        <div style={{fontSize:9,color:"#a5b4fc",marginTop:1}}>Upload your Excel file once · data is saved automatically in your browser</div>
       </div>
-      <UploadScreen onData={setCompanies}/>
+      <UploadScreen onData={cos=>{setCompanies(cos);}}/>
     </div>
   );
 
   return(
     <div style={{height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* Header */}
       <div style={{background:"linear-gradient(135deg,#1e1b4b 0%,#312e81 50%,#4338ca 100%)",padding:"10px 16px",borderBottom:"1px solid #312e81",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div>
             <div style={{fontSize:14,fontWeight:800,color:"#fff"}}>SAHA EXPO 2026 — Team Planner</div>
-            <div style={{fontSize:9,color:"#a5b4fc",marginTop:1}}>
-              {companies.length.toLocaleString()} Companies · May 06–09, 2026
-              <button onClick={clearAndReupload} style={{marginLeft:8,padding:"1px 7px",background:"#ef444422",border:"1px solid #ef444444",borderRadius:4,color:"#ef4444",fontSize:8,cursor:"pointer",fontWeight:700}}>↺ Re-upload</button>
+            <div style={{fontSize:9,color:"#a5b4fc",marginTop:1,display:"flex",alignItems:"center",gap:7}}>
+              <span>{companies.length.toLocaleString()} Companies · May 06–09, 2026</span>
+              <span style={{background:syncStatus==="live"?"#10b98122":"#f59e0b22",color:syncStatus==="live"?"#10b981":"#f59e0b",borderRadius:99,padding:"1px 8px",fontSize:8,fontWeight:700}}>
+                {syncStatus==="live"?"🔄 Live Sync":syncStatus==="local"?"💾 Local Only":"⏳ Connecting..."}
+              </span>
             </div>
           </div>
           <div style={{display:"flex",gap:5,flexWrap:"wrap",justifyContent:"flex-end"}}>
@@ -893,20 +833,11 @@ function App(){
           </div>
         </div>
       </div>
-
-      {/* Tab Bar */}
       <div style={{background:"#1e293b",borderBottom:"1px solid #334155",display:"flex",padding:"0 12px",flexShrink:0}}>
-        {TABS.map(t=>(
-          <button key={t.id} onClick={()=>setTab(t.id)}
-            style={{padding:"10px 13px",border:"none",borderBottom:tab===t.id?"3px solid #6366f1":"3px solid transparent",background:"transparent",color:tab===t.id?"#818cf8":"#64748b",fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4}}>
-            {t.icon} {t.label}
-          </button>
-        ))}
+        {TABS.map(t=>(<button key={t.id} onClick={()=>setTab(t.id)} style={{padding:"10px 13px",border:"none",borderBottom:tab===t.id?"3px solid #6366f1":"3px solid transparent",background:"transparent",color:tab===t.id?"#818cf8":"#64748b",fontWeight:700,fontSize:11,cursor:"pointer",fontFamily:"inherit",display:"flex",alignItems:"center",gap:4}}>{t.icon} {t.label}</button>))}
       </div>
-
-      {/* Content */}
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
-        {tab==="dashboard"&&<DashboardTab companies={companies} appts={appts} onUpdate={onUpdate} acm={acm}/>}
+        {tab==="dashboard"&&<DashboardTab companies={companies} appts={appts} onUpdate={onUpdate} acm={acm} syncStatus={syncStatus}/>}
         {tab==="areas"    &&<AreasTab     companies={companies} appts={appts} onUpdate={onUpdate} acm={acm}/>}
         {tab==="halls"    &&<HallsTab     companies={companies} appts={appts} onUpdate={onUpdate} acm={acm}/>}
         {tab==="calendar" &&<CalendarTab  companies={companies} appts={appts} onUpdate={onUpdate} acm={acm}/>}
